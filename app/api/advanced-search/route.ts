@@ -8,6 +8,20 @@ import { JSDOM, VirtualConsole } from 'jsdom'
 import { createClient } from 'redis'
 
 import {
+  getSearXNGFallbackUrls,
+  getSearXNGMaxRescueTimeoutMs,
+  getSearXNGRequestTimeoutMs,
+  getSearXNGTimeoutRescueStepMs
+} from '@/lib/tools/search/providers/searxng-config'
+import {
+  getAdaptiveSearXNGTimeoutMs,
+  increaseAdaptiveSearXNGTimeout,
+  markSearXNGInstanceFailure,
+  markSearXNGInstanceSuccess,
+  orderSearXNGInstances,
+  reduceAdaptiveSearXNGTimeout
+} from '@/lib/tools/search/providers/searxng-health'
+import {
   SearchResultItem,
   SearXNGResponse,
   SearXNGResult,
@@ -187,9 +201,9 @@ async function advancedSearchXNGSearch(
   includeDomains: string[] = [],
   excludeDomains: string[] = []
 ): Promise<SearXNGSearchResults> {
-  const apiUrl = process.env.SEARXNG_API_URL
-  if (!apiUrl) {
-    throw new Error('SEARXNG_API_URL is not set in the environment variables')
+  const configuredUrls = getSearXNGFallbackUrls()
+  if (configuredUrls.length === 0) {
+    throw new Error('SEARXNG_API_URL or SEARXNG_API_URLS must be configured')
   }
 
   const SEARXNG_ENGINES =
@@ -201,113 +215,145 @@ async function advancedSearchXNGSearch(
     10
   )
 
-  try {
-    const url = new URL(`${apiUrl}/search`)
-    url.searchParams.append('q', query)
-    url.searchParams.append('format', 'json')
-    url.searchParams.append('categories', 'general,images')
+  const orderedUrls = orderSearXNGInstances(configuredUrls)
+  const errors: string[] = []
 
-    // Add time_range if it's not 'None'
-    if (SEARXNG_TIME_RANGE !== 'None') {
-      url.searchParams.append('time_range', SEARXNG_TIME_RANGE)
-    }
+  const baseTimeoutMs = getSearXNGRequestTimeoutMs()
+  const rescueStepMs = getSearXNGTimeoutRescueStepMs()
+  const maxRescueTimeoutMs = getSearXNGMaxRescueTimeoutMs()
 
-    url.searchParams.append('safesearch', SEARXNG_SAFESEARCH)
-    url.searchParams.append('engines', SEARXNG_ENGINES)
+  for (const apiUrl of orderedUrls) {
+    try {
+      const url = new URL(`${apiUrl}/search`)
+      url.searchParams.append('q', query)
+      url.searchParams.append('format', 'json')
+      url.searchParams.append('categories', 'general,images')
 
-    const resultsPerPage = 10
-    const pageno = Math.ceil(maxResults / resultsPerPage)
-    url.searchParams.append('pageno', String(pageno))
+      if (SEARXNG_TIME_RANGE !== 'None') {
+        url.searchParams.append('time_range', SEARXNG_TIME_RANGE)
+      }
 
-    //console.log('SearXNG API URL:', url.toString()) // Log the full URL for debugging
+      url.searchParams.append('safesearch', SEARXNG_SAFESEARCH)
+      url.searchParams.append('engines', SEARXNG_ENGINES)
 
-    const data:
-      | SearXNGResponse
-      | { error: string; status: number; data: string } =
-      await fetchJsonWithRetry(url.toString(), 3)
+      const resultsPerPage = 10
+      const pageno = Math.ceil(maxResults / resultsPerPage)
+      url.searchParams.append('pageno', String(pageno))
 
-    if ('error' in data) {
-      console.error('Invalid response from SearXNG:', data)
-      throw new Error(
-        `Invalid response from SearXNG: ${data.error}. Status: ${data.status}. Data: ${data.data}`
-      )
-    }
+      let timeoutMs = getAdaptiveSearXNGTimeoutMs(apiUrl, baseTimeoutMs)
+      let data:
+        | SearXNGResponse
+        | { error: string; status: number; data: string }
 
-    if (!data || !Array.isArray(data.results)) {
-      console.error('Invalid response structure from SearXNG:', data)
-      throw new Error('Invalid response structure from SearXNG')
-    }
+      while (true) {
+        const startedAt = Date.now()
+        try {
+          data = await fetchJsonWithRetry(url.toString(), 3, timeoutMs)
+          const elapsedMs = Date.now() - startedAt
+          reduceAdaptiveSearXNGTimeout(apiUrl, elapsedMs, baseTimeoutMs)
+          break
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error)
+          const timedOut = message.toLowerCase().includes('timed out')
 
-    let generalResults = data.results.filter(
-      (result: SearXNGResult) => result && !result.img_src
-    )
+          if (!timedOut || timeoutMs >= maxRescueTimeoutMs) {
+            throw error
+          }
 
-    // Apply domain filtering manually
-    if (includeDomains.length > 0 || excludeDomains.length > 0) {
-      generalResults = generalResults.filter(result => {
-        const domain = new URL(result.url).hostname
-        return (
-          (includeDomains.length === 0 ||
-            includeDomains.some(d => domain.includes(d))) &&
-          (excludeDomains.length === 0 ||
-            !excludeDomains.some(d => domain.includes(d)))
+          timeoutMs = increaseAdaptiveSearXNGTimeout(
+            apiUrl,
+            timeoutMs,
+            rescueStepMs,
+            maxRescueTimeoutMs
+          )
+        }
+      }
+
+      if ('error' in data) {
+        throw new Error(
+          `Invalid response from SearXNG: ${data.error}. Status: ${data.status}. Data: ${data.data}`
         )
-      })
-    }
+      }
 
-    if (searchDepth === 'advanced') {
-      const crawledResults = await Promise.all(
-        generalResults
-          .slice(0, maxResults * SEARXNG_CRAWL_MULTIPLIER)
-          .map(result => crawlPage(result, query))
+      if (!data || !Array.isArray(data.results)) {
+        throw new Error('Invalid response structure from SearXNG')
+      }
+
+      markSearXNGInstanceSuccess(apiUrl)
+
+      let generalResults = data.results.filter(
+        (result: SearXNGResult) => result && !result.img_src
       )
-      generalResults = crawledResults
-        .filter(result => result !== null && isQualityContent(result.content))
-        .map(result => result as SearXNGResult)
 
-      const MIN_RELEVANCE_SCORE = 10
-      generalResults = generalResults
-        .map(result => ({
-          ...result,
-          score: calculateRelevanceScore(result, query)
-        }))
-        .filter(result => result.score >= MIN_RELEVANCE_SCORE)
-        .sort((a, b) => b.score - a.score)
+      if (includeDomains.length > 0 || excludeDomains.length > 0) {
+        generalResults = generalResults.filter(result => {
+          try {
+            const domain = new URL(result.url).hostname
+            return (
+              (includeDomains.length === 0 ||
+                includeDomains.some(d => domain.includes(d))) &&
+              (excludeDomains.length === 0 ||
+                !excludeDomains.some(d => domain.includes(d)))
+            )
+          } catch {
+            return includeDomains.length === 0
+          }
+        })
+      }
+
+      if (searchDepth === 'advanced') {
+        const crawledResults = await Promise.all(
+          generalResults
+            .slice(0, maxResults * SEARXNG_CRAWL_MULTIPLIER)
+            .map(result => crawlPage(result, query))
+        )
+        generalResults = crawledResults
+          .filter(result => result !== null && isQualityContent(result.content))
+          .map(result => result as SearXNGResult)
+
+        const MIN_RELEVANCE_SCORE = 10
+        generalResults = generalResults
+          .map(result => ({
+            ...result,
+            score: calculateRelevanceScore(result, query)
+          }))
+          .filter(result => result.score >= MIN_RELEVANCE_SCORE)
+          .sort((a, b) => b.score - a.score)
+          .slice(0, maxResults)
+      }
+
+      generalResults = generalResults.slice(0, maxResults)
+
+      const imageResults = (data.results || [])
+        .filter((result: SearXNGResult) => result && result.img_src)
         .slice(0, maxResults)
-    }
 
-    generalResults = generalResults.slice(0, maxResults)
-
-    const imageResults = (data.results || [])
-      .filter((result: SearXNGResult) => result && result.img_src)
-      .slice(0, maxResults)
-
-    return {
-      results: generalResults.map(
-        (result: SearXNGResult): SearchResultItem => ({
-          title: result.title || '',
-          url: result.url || '',
-          content: result.content || ''
-        })
-      ),
-      query: data.query || query,
-      images: imageResults
-        .map((result: SearXNGResult) => {
-          const imgSrc = result.img_src || ''
-          return imgSrc.startsWith('http') ? imgSrc : `${apiUrl}${imgSrc}`
-        })
-        .filter(Boolean),
-      number_of_results: data.number_of_results || generalResults.length
-    }
-  } catch (error) {
-    console.error('SearchXNG API error:', error)
-    return {
-      results: [],
-      query: query,
-      images: [],
-      number_of_results: 0
+      return {
+        results: generalResults.map(
+          (result: SearXNGResult): SearchResultItem => ({
+            title: result.title || '',
+            url: result.url || '',
+            content: result.content || ''
+          })
+        ),
+        query: data.query || query,
+        images: imageResults
+          .map((result: SearXNGResult) => {
+            const imgSrc = result.img_src || ''
+            return imgSrc.startsWith('http') ? imgSrc : `${apiUrl}${imgSrc}`
+          })
+          .filter(Boolean),
+        number_of_results: data.number_of_results || generalResults.length
+      }
+    } catch (error) {
+      markSearXNGInstanceFailure(apiUrl)
+      const message = error instanceof Error ? error.message : String(error)
+      errors.push(`[${apiUrl}] ${message}`)
+      continue
     }
   }
+
+  throw new Error(`All SearXNG instances failed: ${errors.join(' | ')}`)
 }
 
 async function crawlPage(
@@ -536,10 +582,14 @@ const httpsAgent = new https.Agent({
   //but use this with caution.
 })
 
-async function fetchJsonWithRetry(url: string, retries: number): Promise<any> {
+async function fetchJsonWithRetry(
+  url: string,
+  retries: number,
+  timeoutMs: number
+): Promise<any> {
   for (let i = 0; i < retries; i++) {
     try {
-      return await fetchJson(url)
+      return await fetchJson(url, timeoutMs)
     } catch (error) {
       if (i === retries - 1) throw error
       await new Promise(resolve => setTimeout(resolve, 1000 * (i + 1)))
@@ -547,7 +597,7 @@ async function fetchJsonWithRetry(url: string, retries: number): Promise<any> {
   }
 }
 
-function fetchJson(url: string): Promise<any> {
+function fetchJson(url: string, timeoutMs: number): Promise<any> {
   return new Promise((resolve, reject) => {
     const protocol = url.startsWith('https:') ? https : http
     const agent = url.startsWith('https:') ? httpsAgent : httpAgent
@@ -579,7 +629,7 @@ function fetchJson(url: string): Promise<any> {
       request.destroy()
       reject(new Error('Request timed out'))
     })
-    request.setTimeout(15000) // 15 second timeout
+    request.setTimeout(timeoutMs)
   })
 }
 

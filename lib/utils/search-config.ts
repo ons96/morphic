@@ -3,19 +3,23 @@
  * Provides environment-aware descriptions and guidance for search tools
  */
 
+function hasBraveGeneralProvider(): boolean {
+  return Boolean(process.env.BRAVE_SEARCH_API_KEY || process.env.BRAVE_API_KEY)
+}
+
 /**
  * Checks if a dedicated "general" search provider is available
  * Currently checks for Brave Search, but can be extended for other providers
  */
 export function isGeneralSearchProviderAvailable(): boolean {
-  return !!process.env.BRAVE_SEARCH_API_KEY
+  return hasBraveGeneralProvider()
 }
 
 /**
  * Gets the name of the current general search provider
  */
 export function getGeneralSearchProviderName(): string {
-  if (process.env.BRAVE_SEARCH_API_KEY) {
+  if (hasBraveGeneralProvider()) {
     return 'Brave Search'
   }
   return 'primary provider'
@@ -26,7 +30,7 @@ export function getGeneralSearchProviderName(): string {
  */
 export function supportsMultimediaContentTypes(): boolean {
   // Currently only Brave supports video/image content_types
-  return !!process.env.BRAVE_SEARCH_API_KEY
+  return hasBraveGeneralProvider()
 }
 
 /**
@@ -111,7 +115,7 @@ export function getSearchStrategyGuidance(): string {
  * Returns 'brave' if available, otherwise null to indicate fallback
  */
 export function getGeneralSearchProviderType(): 'brave' | null {
-  if (process.env.BRAVE_SEARCH_API_KEY) {
+  if (hasBraveGeneralProvider()) {
     return 'brave'
   }
   return null
