@@ -47,7 +47,7 @@ export class BraveSearchProvider implements SearchProvider {
   private apiKey: string | undefined
 
   constructor() {
-    this.apiKey = process.env.BRAVE_SEARCH_API_KEY
+    this.apiKey = process.env.BRAVE_SEARCH_API_KEY || process.env.BRAVE_API_KEY
   }
 
   private getImageThumbnailUrl(result: BraveImageResult): string {
