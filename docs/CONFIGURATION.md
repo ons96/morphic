@@ -134,8 +134,13 @@ SearXNG can be used as an alternative search backend with advanced search capabi
 ```bash
 SEARCH_API=searxng
 SEARXNG_API_URL=http://localhost:8080
+SEARXNG_API_URLS=https://searx.tiekoetter.com,https://paulgo.io,https://search.hbubli.cc,https://search.inetol.net,https://priv.au
 SEARXNG_SECRET=""  # generate with: openssl rand -base64 32
 ```
+
+`SEARXNG_API_URLS` is optional. If set, Morphic tries each instance in order with automatic fallback. If omitted, Morphic falls back to `SEARXNG_API_URL` and then built-in public defaults.
+
+When free instances become slower, Morphic automatically increases timeout per-instance (up to `SEARXNG_MAX_RESCUE_TIMEOUT_MS`) before giving up. This keeps slow-but-working free instances usable instead of failing too early.
 
 #### Docker Setup
 
@@ -160,6 +165,12 @@ SEARXNG_MAX_RESULTS=50  # Maximum number of results to return
 SEARXNG_ENGINES=google,bing,duckduckgo,wikipedia  # Comma-separated list of search engines
 SEARXNG_TIME_RANGE=None  # Time range: day, week, month, year, or None
 SEARXNG_SAFESEARCH=0  # 0: off, 1: moderate, 2: strict
+SEARXNG_REQUEST_TIMEOUT_MS=10000  # Per-instance request timeout in milliseconds
+SEARXNG_TIMEOUT_RESCUE_STEP_MS=3000  # Timeout increment when a free instance times out
+SEARXNG_MAX_RESCUE_TIMEOUT_MS=60000  # Upper bound for adaptive timeout rescue
+SEARXNG_FAILURE_COOLDOWN_MS=60000  # Temporarily de-prioritize failing instances
+SEARCH_PROVIDER_FALLBACK_ORDER=searxng,tavily,exa,brave,firecrawl
+SEARCH_PROVIDER_MIN_RESULTS_FOR_SUCCESS=1
 
 # Rate Limiting
 SEARXNG_LIMITER=false  # Enable to limit requests per IP
@@ -221,6 +232,34 @@ Get your API key at: https://brave.com/search/api/
 
 **Fallback Behavior:**
 If `BRAVE_SEARCH_API_KEY` is not configured, `type="general"` searches will automatically fall back to your configured optimized search provider. Video and image searches will still work but may have limited multimedia support depending on the provider.
+
+For optimized search, Morphic can fail over across providers in `SEARCH_PROVIDER_FALLBACK_ORDER` and skips providers without configured API keys.
+`BRAVE_SEARCH_API_KEY` and `BRAVE_API_KEY` are both supported for Brave provider fallback.
+
+### Exa Search (Optional)
+
+Exa can be used as an optimized search provider and as a fallback provider.
+
+```bash
+EXA_API_KEY=[YOUR_EXA_API_KEY]
+SEARCH_API=exa
+
+# Fast + compact defaults (recommended for chat UX)
+EXA_SEARCH_TYPE=fast  # keyword, neural, auto, hybrid, fast, deep
+EXA_HIGHLIGHTS_MAX_CHARACTERS=4000
+
+# Freshness controls
+EXA_MAX_AGE_HOURS=-1  # -1 cache-only (fastest), omit for cache+fallback crawling
+EXA_LIVECRAWL_MODE=preferred  # Optional: never, fallback, always, auto, preferred
+```
+
+**Recommended defaults for mobile/Telegram chat:**
+
+- `EXA_SEARCH_TYPE=fast` for lower latency.
+- `EXA_HIGHLIGHTS_MAX_CHARACTERS=4000` for compact snippets and lower token usage.
+- `EXA_MAX_AGE_HOURS=-1` for maximum speed, or remove it if you prefer occasional freshness checks.
+
+**Security note:** never commit raw API keys or MCP URLs containing keys. Use environment variables/secrets management instead.
 
 ## Additional AI Providers
 
