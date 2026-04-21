@@ -1,0 +1,102 @@
+{
+  "sources": [
+    "https://searx.space/data/instances.json",
+    "https://searchengine.party/",
+    "https://searx.neocities.org/instancescores"
+  ],
+  "generatedAt": "2026-03-15T00:00:00Z",
+  "method": "rank by searx.space success%, uptime week/month, median latency, and manual filtering for public HTTPS normal-network instances",
+  "instances": [
+    {
+      "url": "https://searx.tiekoetter.com",
+      "successPercentage": 100,
+      "uptimeWeek": 100,
+      "uptimeMonth": 100,
+      "medianSeconds": 0.508
+    },
+    {
+      "url": "https://paulgo.io",
+      "successPercentage": 100,
+      "uptimeWeek": 100,
+      "uptimeMonth": 98.27,
+      "medianSeconds": 0.506
+    },
+    {
+      "url": "https://search.hbubli.cc",
+      "successPercentage": 100,
+      "uptimeWeek": 100,
+      "uptimeMonth": 100,
+      "medianSeconds": 0.25
+    },
+    {
+      "url": "https://search.inetol.net",
+      "successPercentage": 100,
+      "uptimeWeek": 98.71,
+      "uptimeMonth": 99.63,
+      "medianSeconds": 0.476
+    },
+    {
+      "url": "https://priv.au",
+      "successPercentage": 100,
+      "uptimeWeek": 99.69,
+      "uptimeMonth": 99.15,
+      "medianSeconds": 0.204
+    },
+    {
+      "url": "https://search.ononoki.org",
+      "successPercentage": 100,
+      "uptimeWeek": 99.02,
+      "uptimeMonth": 99.77,
+      "medianSeconds": 0.587
+    },
+    {
+      "url": "https://search.mdosch.de",
+      "successPercentage": 100,
+      "uptimeWeek": 100,
+      "uptimeMonth": 100,
+      "medianSeconds": 0.662
+    },
+    {
+      "url": "https://search.im-in.space",
+      "successPercentage": 100,
+      "uptimeWeek": 100,
+      "uptimeMonth": 100,
+      "medianSeconds": 0.723
+    },
+    {
+      "url": "https://search.rowie.at",
+      "successPercentage": 100,
+      "uptimeWeek": 100,
+      "uptimeMonth": 100,
+      "medianSeconds": 0.728
+    },
+    {
+      "url": "https://search.bladerunn.in",
+      "successPercentage": 100,
+      "uptimeWeek": 99.43,
+      "uptimeMonth": 99.87,
+      "medianSeconds": 0.712
+    },
+    {
+      "url": "https://search.sapti.me",
+      "successPercentage": 100,
+      "uptimeWeek": 100,
+      "uptimeMonth": 100,
+      "medianSeconds": 0.777
+    },
+    {
+      "url": "https://search.seddens.net",
+      "successPercentage": 100,
+      "uptimeWeek": 99.52,
+      "uptimeMonth": 97.14,
+      "medianSeconds": 1.304
+    },
+    {
+      "url": "https://search.freestater.org",
+      "successPercentage": 100,
+      "uptimeWeek": 99.68,
+      "uptimeMonth": 97.46,
+      "medianSeconds": 1.162
+    }
+  ]
+}
