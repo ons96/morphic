@@ -48,4 +48,23 @@ export abstract class BaseSearchProvider implements SearchProvider {
       )
     }
   }
+
+  protected createProviderError(
+    provider: string,
+    message: string,
+    cause?: unknown
+  ): Error {
+    const err = new Error(message)
+    err.name = `${provider}ProviderError`
+
+    if (cause !== undefined) {
+      Object.defineProperty(err, 'cause', {
+        value: cause,
+        enumerable: false,
+        configurable: true
+      })
+    }
+
+    return err
+  }
 }

@@ -11,8 +11,45 @@ import { getBaseUrlString } from '@/lib/utils/url'
 import {
   createSearchProvider,
   DEFAULT_PROVIDER,
+  getProviderFallbackOrder,
   SearchProviderType
 } from './search/providers'
+
+function getMinimumResultsForProviderSuccess(): number {
+  const parsed = parseInt(process.env.SEARCH_PROVIDER_MIN_RESULTS_FOR_SUCCESS || '1', 10)
+  if (Number.isNaN(parsed)) return 1
+
+  return Math.min(20, Math.max(0, parsed))
+}
+
+function hasUsableResults(
+  searchResult: SearchResults | null,
+  minResultsForSuccess: number
+): boolean {
+  if (!searchResult) {
+    return false
+  }
+
+  const resultCount = Array.isArray(searchResult.results)
+    ? searchResult.results.length
+    : 0
+  const imageCount = Array.isArray(searchResult.images)
+    ? searchResult.images.length
+    : 0
+  const videoCount = Array.isArray(searchResult.videos)
+    ? searchResult.videos.length
+    : 0
+
+  if (resultCount >= minResultsForSuccess) {
+    return true
+  }
+
+  if (resultCount > 0 || imageCount > 0 || videoCount > 0) {
+    return true
+  }
+
+  return minResultsForSuccess === 0
+}
 
 /**
  * Creates a search tool with the appropriate schema for the given model.
@@ -48,101 +85,128 @@ export function createSearchTool(fullModel: string) {
 
       // Use the original query as is - any provider-specific handling will be done in the provider
       const filledQuery = query
-      let searchResult: SearchResults
+      let searchResult: SearchResults | null = null
 
-      // Determine which provider to use based on type
-      let searchAPI: SearchProviderType
+      let preferredProvider: SearchProviderType
       if (type === 'general') {
-        // Try to use dedicated general search provider
         const generalProvider = getGeneralSearchProviderType()
         if (generalProvider) {
-          searchAPI = generalProvider
+          preferredProvider = generalProvider
         } else {
-          // Fallback to primary provider (optimized search provider)
-          searchAPI =
+          preferredProvider =
             (process.env.SEARCH_API as SearchProviderType) || DEFAULT_PROVIDER
           console.log(
-            `[Search] type="general" requested but no dedicated provider available, using optimized search provider: ${searchAPI}`
+            `[Search] type="general" requested but no dedicated provider available, using optimized search provider: ${preferredProvider}`
           )
         }
       } else {
-        // For 'optimized', use the configured provider
-        searchAPI =
+        preferredProvider =
           (process.env.SEARCH_API as SearchProviderType) || DEFAULT_PROVIDER
       }
 
-      const effectiveSearchDepthForAPI =
-        searchAPI === 'searxng' &&
-        process.env.SEARXNG_DEFAULT_DEPTH === 'advanced'
-          ? 'advanced'
-          : effectiveSearchDepth || 'basic'
+      const providerOrder = getProviderFallbackOrder(preferredProvider)
+      if (providerOrder.length === 0) {
+        throw new Error('No search providers are configured with valid credentials')
+      }
+
+      const minResultsForSuccess = getMinimumResultsForProviderSuccess()
+      const providerErrors: string[] = []
 
       console.log(
-        `Using search API: ${searchAPI}, Type: ${type}, Search Depth: ${effectiveSearchDepthForAPI}`
+        `[Search] type=${type} preferred=${preferredProvider} providers=${providerOrder.join(' -> ')}`
       )
 
       try {
-        if (
-          searchAPI === 'searxng' &&
-          effectiveSearchDepthForAPI === 'advanced'
-        ) {
-          // Get the base URL using the centralized utility function
-          const baseUrl = await getBaseUrlString()
+        for (const provider of providerOrder) {
+          const effectiveSearchDepthForProvider =
+            provider === 'searxng' && process.env.SEARXNG_DEFAULT_DEPTH === 'advanced'
+              ? 'advanced'
+              : effectiveSearchDepth || 'basic'
 
-          const response = await fetch(`${baseUrl}/api/advanced-search`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              query: filledQuery,
-              maxResults: effectiveMaxResults,
-              searchDepth: effectiveSearchDepthForAPI,
-              includeDomains: include_domains,
-              excludeDomains: exclude_domains
-            })
-          })
-          if (!response.ok) {
-            throw new Error(
-              `Advanced search API error: ${response.status} ${response.statusText}`
-            )
-          }
-          searchResult = await response.json()
-        } else {
-          // Use the provider factory to get the appropriate search provider
-          const searchProvider = createSearchProvider(searchAPI)
+          console.log(
+            `[Search] trying provider=${provider} depth=${effectiveSearchDepthForProvider}`
+          )
 
-          // Pass content_types only for Brave provider
-          if (searchAPI === 'brave') {
-            searchResult = await searchProvider.search(
-              filledQuery,
-              effectiveMaxResults,
-              effectiveSearchDepthForAPI,
-              include_domains,
-              exclude_domains,
-              {
-                type: type as 'general' | 'optimized',
-                content_types: content_types as Array<
-                  'web' | 'video' | 'image' | 'news'
-                >
+          try {
+            if (
+              provider === 'searxng' &&
+              effectiveSearchDepthForProvider === 'advanced'
+            ) {
+              const baseUrl = await getBaseUrlString()
+
+              const response = await fetch(`${baseUrl}/api/advanced-search`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  query: filledQuery,
+                  maxResults: effectiveMaxResults,
+                  searchDepth: effectiveSearchDepthForProvider,
+                  includeDomains: include_domains,
+                  excludeDomains: exclude_domains
+                })
+              })
+              if (!response.ok) {
+                throw new Error(
+                  `Advanced search API error: ${response.status} ${response.statusText}`
+                )
               }
-            )
-          } else {
-            searchResult = await searchProvider.search(
-              filledQuery,
-              effectiveMaxResults,
-              effectiveSearchDepthForAPI,
-              include_domains,
-              exclude_domains
-            )
+              searchResult = await response.json()
+            } else {
+              const searchProvider = createSearchProvider(provider)
+
+              if (provider === 'brave') {
+                searchResult = await searchProvider.search(
+                  filledQuery,
+                  effectiveMaxResults,
+                  effectiveSearchDepthForProvider,
+                  include_domains,
+                  exclude_domains,
+                  {
+                    type: type as 'general' | 'optimized',
+                    content_types: content_types as Array<
+                      'web' | 'video' | 'image' | 'news'
+                    >
+                  }
+                )
+              } else {
+                searchResult = await searchProvider.search(
+                  filledQuery,
+                  effectiveMaxResults,
+                  effectiveSearchDepthForProvider,
+                  include_domains,
+                  exclude_domains
+                )
+              }
+            }
+
+            if (!hasUsableResults(searchResult, minResultsForSuccess)) {
+              providerErrors.push(`[${provider}] empty or unusable results`)
+              continue
+            }
+
+            break
+          } catch (providerError) {
+            const message =
+              providerError instanceof Error
+                ? providerError.message
+                : String(providerError)
+            providerErrors.push(`[${provider}] ${message}`)
+            continue
           }
+        }
+
+        if (!searchResult || !hasUsableResults(searchResult, minResultsForSuccess)) {
+          throw new Error(
+            `All search providers failed or returned no usable results: ${providerErrors.join(' | ')}`
+          )
         }
       } catch (error) {
         console.error('Search API error:', error)
-        // Re-throw the error to let AI SDK handle it properly
         throw error instanceof Error ? error : new Error('Unknown search error')
       }
 
       // Add citation mapping and toolCallId to search results
-      if (searchResult.results && searchResult.results.length > 0) {
+      if (searchResult?.results && searchResult.results.length > 0) {
         const citationMap: Record<number, SearchResultItem> = {}
         searchResult.results.forEach((result, index) => {
           citationMap[index + 1] = result // Citation numbers start at 1
@@ -151,7 +215,7 @@ export function createSearchTool(fullModel: string) {
       }
 
       // Add toolCallId from context
-      if (context?.toolCallId) {
+      if (context?.toolCallId && searchResult) {
         searchResult.toolCallId = context.toolCallId
       }
 
@@ -160,7 +224,12 @@ export function createSearchTool(fullModel: string) {
       // Yield final results with complete state
       yield {
         state: 'complete' as const,
-        ...searchResult
+        ...(searchResult || {
+          results: [],
+          images: [],
+          query: filledQuery,
+          number_of_results: 0
+        })
       }
     }
   })
